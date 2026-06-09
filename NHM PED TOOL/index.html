@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FiveM Addon Ped Converter (NHM Edition)</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #1e1e24;
+            color: #f5f5f5;
+            margin: 0;
+            padding: 40px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .container {
+            max-width: 600px;
+            width: 100%;
+            background: #2a2a35;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+        }
+        h1 {
+            text-align: center;
+            color: #ff8c00;
+            margin-top: 0;
+        }
+        p {
+            color: #aaa;
+            font-size: 14px;
+            text-align: center;
+        }
+        .path-box {
+            background: #15151a;
+            border-left: 4px solid #ff8c00;
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .path-box button {
+            width: auto;
+            padding: 6px 12px;
+            font-size: 12px;
+            background: #444;
+        }
+        #drop-zone {
+            border: 2px dashed #ff8c00;
+            border-radius: 8px;
+            padding: 40px 20px;
+            text-align: center;
+            cursor: pointer;
+            background: #333344;
+            transition: background 0.3s ease;
+            margin-bottom: 20px;
+        }
+        #drop-zone.hover {
+            background: #444455;
+            border-color: #ffb366;
+        }
+        .file-list {
+            background: #1e1e24;
+            border-radius: 6px;
+            padding: 10px;
+            max-height: 150px;
+            overflow-y: auto;
+            margin-bottom: 20px;
+            font-family: monospace;
+            font-size: 13px;
+        }
+        .file-item {
+            padding: 4px 8px;
+            border-bottom: 1px solid #333;
+        }
+        button {
+            width: 100%;
+            background-color: #ff8c00;
+            color: white;
+            border: none;
+            padding: 14px;
+            font-size: 16px;
+            font-weight: bold;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        button:hover {
+            background-color: #e07b00;
+        }
+        button:disabled {
+            background-color: #555;
+            cursor: not-allowed;
+        }
+        #status {
+            margin-top: 15px;
+            font-weight: bold;
+            text-align: center;
+        }
+        .success { color: #4caf50; }
+        .error { color: #f44336; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>FiveM Ped Converter</h1>
+    
+    <div class="path-box">
+        <div>
+            <strong>Target Export Folder:</strong><br>
+            <span id="path-display" style="color: #aaa; font-family: monospace;">Not Configured</span>
+        </div>
+        <button id="set-path-btn">Change Folder</button>
+    </div>
+
+    <div id="drop-zone">
+        Drag & Drop Ped Files Here <br><span style="font-size: 12px; color: #888;">(or click to select)</span>
+        <input type="file" id="file-input" multiple style="display: none;" accept=".ydd,.yft,.ymt,.ytd">
+    </div>
+
+    <div class="file-list" id="file-list">
+        <div style="color: #666; text-align: center;">No files selected yet.</div>
+    </div>
+
+    <button id="convert-btn" disabled>Export FiveM Resource</button>
+    <div id="status"></div>
+</div>
+
+<script>
+    const dropZone = document.getElementById('drop-zone');
+    const fileInput = document.getElementById('file-input');
+    const fileListDiv = document.getElementById('file-list');
+    const convertBtn = document.getElementById('convert-btn');
+    const statusDiv = document.getElementById('status');
+    const pathDisplay = document.getElementById('path-display');
+    const setPathBtn = document.getElementById('set-path-btn');
+
+    let selectedFiles = [];
+    let detectedPedName = "addon_ped";
+    let targetDirectoryHandle = null;
+
+    function getDB() {
+        return new Promise((resolve, reject) => {
+            const request = indexedDB.open("FolderStorage", 1);
+            request.onupgradeneeded = e => e.target.result.createObjectStore("handles");
+            request.onsuccess = e => resolve(e.target.result);
+            request.onerror = e => reject(e.target.error);
+        });
+    }
+
+    async function loadSavedFolder() {
+        try {
+            const db = await getDB();
+            const tx = db.transaction("handles", "readonly");
+            const handle = await new Promise(r => tx.objectStore("handles").get("exportDir").onsuccess = e => r(e.target.result));
+            
+            if (handle) {
+                if (await handle.queryPermission({mode: 'readwrite'}) === 'granted') {
+                    targetDirectoryHandle = handle;
+                    pathDisplay.textContent = handle.name + " (Saved Root Folder)";
+                } else {
+                    pathDisplay.innerHTML = '<span style="color: #ff8c00;">Click "Change Folder" to unlock saved directory</span>';
+                }
+            }
+        } catch (e) {
+            console.log("No directory saved yet.");
+        }
+    }
+
+    async function saveFolder(handle) {
+        const db = await getDB();
+        const tx = db.transaction("handles", "readwrite");
+        tx.objectStore("handles").put(handle, "exportDir");
+    }
+
+    setPathBtn.addEventListener('click', async () => {
+        try {
+            targetDirectoryHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+            await saveFolder(targetDirectoryHandle);
+            pathDisplay.textContent = targetDirectoryHandle.name + " (Saved Root Folder)";
+            statusDiv.textContent = "Target directory locked in successfully!";
+        } catch (err) {
+            statusDiv.className = "error";
+            statusDiv.textContent = "Directory selection cancelled.";
+        }
+    });
+
+    ['dragenter', 'dragover'].forEach(eventName => {
+        dropZone.addEventListener(eventName, (e) => { e.preventDefault(); dropZone.classList.add('hover'); });
+    });
+    ['dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, (e) => { e.preventDefault(); dropZone.classList.remove('hover'); });
+    });
+
+    dropZone.addEventListener('drop', (e) => handleFiles(e.dataTransfer.files));
+    dropZone.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
+
+    function handleFiles(files) {
+        selectedFiles = Array.from(files).filter(file => {
+            const ext = file.name.split('.').pop().toLowerCase();
+            return ['ydd', 'yft', 'ymt', 'ytd'].includes(ext);
+        });
+
+        if (selectedFiles.length === 0) {
+            fileListDiv.innerHTML = '<div style="color: #f44336; text-align: center;">No valid GTA V ped files (.ydd, .yft, .ymt, .ytd) detected!</div>';
+            convertBtn.disabled = true;
+            return;
+        }
+
+        const sampleFile = selectedFiles[0].name;
+        detectedPedName = sampleFile.substring(0, sampleFile.lastIndexOf('.'));
+
+        fileListDiv.innerHTML = '';
+        selectedFiles.forEach(file => {
+            const item = document.createElement('div');
+            item.className = 'file-item';
+            item.textContent = `📄 ${file.name}`;
+            fileListDiv.appendChild(item);
+        });
+
+        statusDiv.innerHTML = `Ready to convert: <span style="color: #ff8c00;">${detectedPedName}</span>`;
+        convertBtn.disabled = false;
+    }
+
+    convertBtn.addEventListener('click', async () => {
+        if (!targetDirectoryHandle) {
+            try {
+                targetDirectoryHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+                await saveFolder(targetDirectoryHandle);
+                pathDisplay.textContent = targetDirectoryHandle.name + " (Saved Root Folder)";
+            } catch (e) {
+                statusDiv.className = "error";
+                statusDiv.textContent = "Please pick your export folder first.";
+                return;
+            }
+        }
+
+        try {
+            if (await targetDirectoryHandle.queryPermission({mode: 'readwrite'}) !== 'granted') {
+                await targetDirectoryHandle.requestPermission({mode: 'readwrite'});
+            }
+
+            statusDiv.className = "";
+            statusDiv.textContent = `Processing and writing to folder...`;
+
+            // 1. Create top-level resource folder
+            const resourceFolder = await targetDirectoryHandle.getDirectoryHandle(detectedPedName, { create: true });
+            
+            // 2. Create 'stream' folder
+            const streamFolder = await resourceFolder.getDirectoryHandle('stream', { create: true });
+            
+            // 3. Write ped asset files (.ydd, .ytd, etc.)
+            for (const file of selectedFiles) {
+                const fileHandle = await streamFolder.getFileHandle(file.name, { create: true });
+                const writable = await fileHandle.createWritable();
+                await writable.write(file);
+                await writable.close();
+            }
+
+            // 4. Create and write fxmanifest.lua using exact requested formatting
+            const fxManifestContent = `fx_version 'cerulean'\ngame 'gta5'\n\nauthor 'Uncle Jord'\ndescription 'NHM Ped Development Tool 4 FiveM'\n\nfiles {\n    'peds.meta',\n}\n\ndata_file 'PED_METADATA_FILE' 'peds.meta'\n`;
+            const manifestHandle = await resourceFolder.getFileHandle('fxmanifest.lua', { create: true });
+            const manifestWritable = await manifestHandle.createWritable();
+            await manifestWritable.write(fxManifestContent);
+            await manifestWritable.close();
+
+            // 5. Create and write peds.meta using custom configuration XML
+            const pedsMetaContent = `<?xml version="1.0" encoding="UTF-8"?>\n<CPedModelInfo__InitDataList>\n   <InitDatas>\n   <Item>\n         <Name>${detectedPedName}</Name>\n         <ClipDictionaryName>move_m@generic</ClipDictionaryName>\n         <ExpressionSetName>expr_set_ambient_male</ExpressionSetName>\n         <Pedtype>CIVMALE</Pedtype>\n         <MovementClipSet>move_m@business@c</MovementClipSet>\n         <StrafeClipSet>move_ped_strafing</StrafeClipSet>\n         <MovementToStrafeClipSet>move_ped_to_strafe</MovementToStrafeClipSet>\n         <InjuredStrafeClipSet>move_strafe_injured</InjuredStrafeClipSet>\n         <FullBodyDamageClipSet>dam_ko</FullBodyDamageClipSet>\n         <AdditiveDamageClipSet>dam_ad</AdditiveDamageClipSet>\n         <DefaultGestureClipSet>ANIM_GROUP_GESTURE_M_GENERIC</DefaultGestureClipSet>\n         <FacialClipsetGroupName>facial_clipset_group_gen_male</FacialClipsetGroupName>\n         <DefaultVisemeClipSet>ANIM_GROUP_VISEMES_M_LO</DefaultVisemeClipSet>\n         <PoseMatcherName>Male</PoseMatcherName>\n         <PoseMatcherProneName>Male_prone</PoseMatcherProneName>\n         <GetupSetHash>NMBS_SLOW_GETUPS</GetupSetHash>\n         <CreatureMetadataName>ambientPed_upperWrinkles</CreatureMetadataName>\n         <DecisionMakerName>DEFAULT</DecisionMakerName>\n         <MotionTaskDataSetName>STANDARD_PED</MotionTaskDataSetName>\n         <DefaultTaskDataSetName>STANDARD_PED</DefaultTaskDataSetName>\n         <PedCapsuleName>STANDARD_MALE</PedCapsuleName>\n         <RelationshipGroup>CIVMALE</RelationshipGroup>\n         <NavCapabilitiesName>STANDARD_PED</NavCapabilitiesName>\n         <PerceptionInfo>DEFAULT_PERCEPTION</PerceptionInfo>\n         <DefaultBrawlingStyle>BS_AI</DefaultBrawlingStyle>\n         <DefaultUnarmedWeapon>WEAPON_UNARMED</DefaultUnarmedWeapon>\n         <Personality>SERVICEMALES</Personality>\n         <CombatInfo>DEFAULT</CombatInfo>\n         <VfxInfoName>VFXPEDINFO_HUMAN_GENERIC</VfxInfoName>\n         <AmbientClipsForFlee>FLEE</AmbientClipsForFlee>\n         <AbilityType>SAT_NONE</AbilityType>\n         <ThermalBehaviour>TB_WARM</ThermalBehaviour>\n         <SuperlodType>SLOD_HUMAN</SuperlodType>\n         <ScenarioPopStreamingSlot>SCENARIO_POP_STREAMING_NORMAL</ScenarioPopStreamingSlot>\n         <DefaultSpawningPreference>DSP_NORMAL</DefaultSpawningPreference>\n         <IsStreamedGfx value="false" />\n      </Item>\n   </InitDatas>\n</CPedModelInfo__InitDataList>\n`;
+            const metaHandle = await resourceFolder.getFileHandle('peds.meta', { create: true });
+            const metaWritable = await metaHandle.createWritable();
+            await metaWritable.write(pedsMetaContent);
+            await metaWritable.close();
+
+            statusDiv.className = "success";
+            statusDiv.innerHTML = `🎉 Successfully compiled and dropped <strong>[${detectedPedName}]</strong> directly into your export folder!`;
+            
+            selectedFiles = [];
+            convertBtn.disabled = true;
+            fileListDiv.innerHTML = '<div style="color: #666; text-align: center;">Ready for next conversion.</div>';
+
+        } catch (err) {
+            console.error(err);
+            statusDiv.className = "error";
+            statusDiv.textContent = `Export failed: ${err.message}`;
+        }
+    });
+
+    loadSavedFolder();
+</script>
+
+</body>
+</html>
